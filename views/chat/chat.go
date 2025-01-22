@@ -25,12 +25,13 @@ const (
 	onlineUsersContainerWidth   = 20
 	onlineUsersContainerPadding = 1
 	onlineUsersContainerBorder  = 1
-	logoOffset                  = 6
+	onlineUsersContainerSize    = onlineUsersContainerWidth + onlineUsersContainerPadding*2 + onlineUsersContainerBorder
+	logoOffset                  = 5
 	messageBoxOffset            = 4
-	sendButtonSize              = 4 + 4
-	leaveButtonSize             = 5 + 4
-	buttonGap                   = 2
-	formGap                     = 3
+	sendButtonSize              = 4 + 6
+	leaveButtonSize             = 5 + 6
+	buttonGap                   = 1
+	formGap                     = 2
 	containerXPadding           = 1
 )
 
@@ -173,6 +174,10 @@ func (c ChatState) Update(msg tea.Msg) (ChatState, tea.Cmd) {
 	case tea.MouseMsg:
 		var cmd tea.Cmd
 		c.chatViewport.SetContent(renderMessageView(c.userName, c.messages, c.clientStyles))
+		if msg.Type == tea.MouseLeft {
+			c.chatViewport.GotoBottom()
+			return c, nil
+		}
 		c.chatViewport, cmd = c.chatViewport.Update(msg)
 		return c, cmd
 
@@ -220,16 +225,12 @@ func (c ChatState) Render(terminalState *terminal.TerminalState, messages []mode
 	// Header
 	logo := lipgloss.NewStyle().
 		Foreground(styles.PrimaryColor).
-		Padding(0, 1).
+		Padding(0, 1, 1).
 		Render(consts.LOGO_NO_MARGIN)
 
-	var roomText string
-	if c.roomId != "" {
-		roomLabel := styles.BoldRegularTxt.Render("Room: ")
-		roomText = lipgloss.NewStyle().PaddingLeft(1).MarginBottom(1).Render(roomLabel + c.roomId)
-	}
-
-	header := lipgloss.JoinVertical(lipgloss.Top, logo, roomText)
+	header := lipgloss.NewStyle().
+		Width(terminalState.Width - onlineUsersContainerSize).
+		Render(lipgloss.JoinVertical(lipgloss.Top, logo))
 
 	// Online Users Card
 	styledActiveUsers := strings.Builder{}
@@ -244,6 +245,14 @@ func (c ChatState) Render(terminalState *terminal.TerminalState, messages []mode
 	}
 
 	sideBarLabelTextStyle := lipgloss.NewStyle().Width(onlineUsersContainerWidth).Bold(true)
+
+	var roomText string
+	if c.roomId != "" {
+		roomLabel := styles.BoldRegularTxt.Render("Room:")
+		roomId := styles.RegularTxt.Foreground(styles.PrimaryColor).Underline(true).Render(c.roomId)
+		roomText = lipgloss.NewStyle().MarginTop(2).Render(roomLabel, roomId) + "\n\n\n"
+	}
+
 	activeUsersCountText := sideBarLabelTextStyle.Render(fmt.Sprintf("Online Count: %d\n", len(activeUsers)))
 
 	onlineUsersLabelText := ""
@@ -253,25 +262,25 @@ func (c ChatState) Render(terminalState *terminal.TerminalState, messages []mode
 		styledActiveUsersString += "\n"
 	}
 	onlineUsersContainer := lipgloss.NewStyle().
-		Height(c.contentHeight).
+		Height(c.contentHeight+logoOffset).
 		Width(onlineUsersContainerWidth).
-		Padding(0, onlineUsersContainerPadding, 0).
+		Padding(0, onlineUsersContainerPadding, 1).
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderLeft(true).
-		Render(activeUsersCountText + onlineUsersLabelText + styledActiveUsersString)
+		Render(roomText + activeUsersCountText + onlineUsersLabelText + styledActiveUsersString)
 
 	c.chatViewport.SetContent(renderMessageView(c.userName, messages, styles))
 
 	// Input Box
 	inputBox := lipgloss.NewStyle().
-		Width(terminalState.Width - sendButtonSize - leaveButtonSize - buttonGap - containerXPadding*2 - 2).
+		Width(terminalState.Width - sendButtonSize - leaveButtonSize - buttonGap - containerXPadding*2).
 		Render(renderAreaInput(c.userName, c.chatInput, styles))
 
 	// Button Group
 	sendButton := renderButton("send", c.activeInputId == sendButtonId, styles)
 	buttonGap := strings.Repeat(" ", buttonGap)
 	leaveButton := renderButton("leave", c.activeInputId == leaveButtonId, styles)
-	buttonGroup := lipgloss.NewStyle().Padding(1, 0).Render(lipgloss.JoinHorizontal(lipgloss.Left, sendButton, buttonGap, leaveButton))
+	buttonGroup := lipgloss.NewStyle().Padding(1, 1).Render(lipgloss.JoinHorizontal(lipgloss.Left, sendButton, buttonGap, leaveButton))
 
 	formContainer := lipgloss.NewStyle().Padding(2, containerXPadding, 0)
 	form := formContainer.Render(
@@ -281,9 +290,11 @@ func (c ChatState) Render(terminalState *terminal.TerminalState, messages []mode
 			buttonGroup,
 		))
 
-	content := lipgloss.JoinHorizontal(lipgloss.Left, c.chatViewport.View(), onlineUsersContainer)
+	headerWithViewport := lipgloss.JoinVertical(lipgloss.Top, header, c.chatViewport.View())
 
-	ui := lipgloss.JoinVertical(lipgloss.Left, header, content, form)
+	content := lipgloss.JoinHorizontal(lipgloss.Left, headerWithViewport, onlineUsersContainer)
+
+	ui := lipgloss.JoinVertical(lipgloss.Left, content, form)
 
 	return ui
 }
