@@ -13,6 +13,7 @@ type ClientStyles struct {
 	PrimaryColor lipgloss.Color
 	GreyColor    lipgloss.Color
 	MutedColor   lipgloss.Color
+	ErrorColor   lipgloss.Color
 }
 
 func NewClientStyles(renderer *lipgloss.Renderer) *ClientStyles {
@@ -23,6 +24,7 @@ func NewClientStyles(renderer *lipgloss.Renderer) *ClientStyles {
 	primaryColor := lipgloss.Color("#F25D94")
 	greyColor := lipgloss.Color("#888B7E")
 	mutedColor := lipgloss.Color("240")
+	errorColor := lipgloss.Color("#FF0000")
 
 	buttonStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#FFF7DB")).
@@ -52,5 +54,6 @@ func NewClientStyles(renderer *lipgloss.Renderer) *ClientStyles {
 		PrimaryColor: primaryColor,
 		GreyColor:    greyColor,
 		MutedColor:   mutedColor,
+		ErrorColor:   errorColor,
 	}
 }

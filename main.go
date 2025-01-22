@@ -195,10 +195,11 @@ func (m clientState) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		if m.activeView == VIEW_CHAT {
 			var cmd tea.Cmd
-			m.chatState, cmd = m.chatState.HandleMouse(msg)
+			m.chatState, cmd = m.chatState.Update(msg)
 			return m, cmd
 		}
 
+	// Global input handling that takes priority over views
 	case tea.KeyMsg:
 		switch key := msg.Type; key {
 		case tea.KeyCtrlC:
@@ -207,63 +208,55 @@ func (m clientState) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 
-			// Tracking disconnected users
+			// TODO: Should also handle non-graceful logouts
 			serverRoom.RemoveActiveUser(m.user.displayName)
 
 			return m, tea.Quit
-
-		// Submit handler for activeView
-		case tea.KeyEnter:
-			if m.activeView == VIEW_LOGIN {
-				if m.loginState.CanSubmit() {
-					status, roomId := m.loginState.Submit()
-					switch status {
-					case login.LoginConfirmed:
-
-						if roomId == "" {
-							return m, nil
-						}
-
-						serverRoom := serverState.rooms[roomId]
-						if serverRoom != nil {
-							m.activeView = VIEW_CHAT
-							m.chatState = m.chatState.SetRoom(serverRoom.roomId, serverRoom.messages)
-
-							m.roomId = roomId
-							serverRoom.AddActiveUser(m.user.displayName)
-						}
-
-						return m, nil
-					case login.LoginQuit:
-						return m, tea.Quit
-					}
-					// Should handle incorrect response? Should not be the case.
-					return m, nil
-				}
-			}
-			if m.activeView == VIEW_CHAT {
-				if m.loginState.CanSubmit() {
-					var message string
-					m.chatState, message = m.chatState.Submit()
-					serverRoom := serverState.rooms[m.roomId]
-					if serverRoom != nil {
-						serverRoom.AddMessage(model.Message{
-							Username:  m.user.displayName,
-							Text:      message,
-							Timestamp: time.Now(),
-						})
-					}
-					return m, nil
-				}
-			}
 		}
+
+	case chat.MessageSentMsg:
+		serverRoom := serverState.rooms[m.roomId]
+		if serverRoom != nil {
+			serverRoom.AddMessage(model.Message{
+				Username:  m.user.displayName,
+				Text:      msg.Message,
+				Timestamp: time.Now(),
+			})
+		}
+		return m, nil
+
+	case login.RoomJoinRequestedMsg:
+		roomId := msg.RoomId
+		serverRoom := serverState.rooms[roomId]
+		if serverRoom != nil {
+			m.activeView = VIEW_CHAT
+			m.chatState = m.chatState.SetRoom(serverRoom.roomId, serverRoom.messages)
+
+			m.roomId = roomId
+			serverRoom.AddActiveUser(m.user.displayName)
+		} else {
+			m.loginState = m.loginState.SetFormError("room not found")
+			return m, nil
+		}
+
+	case chat.LeaveChatMsg:
+		serverRoom := serverState.rooms[m.roomId]
+		if serverRoom == nil {
+			return m, tea.Quit
+		}
+		serverRoom.RemoveActiveUser(m.user.displayName)
+		m.activeView = VIEW_LOGIN
+		m.loginState = m.loginState.Reset()
+		return m, nil
 
 	}
 
 	if m.activeView == VIEW_LOGIN {
-		m.loginState = m.loginState.Update(msg)
-		return m, nil
+		var cmd tea.Cmd
+		m.loginState, cmd = m.loginState.Update(msg)
+		return m, cmd
 	}
+
 	if m.activeView == VIEW_CHAT {
 		var cmd tea.Cmd
 

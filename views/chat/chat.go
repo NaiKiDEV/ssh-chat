@@ -3,13 +3,11 @@ package chat
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/NaiKiDEV/ssh-chat/internal/consts"
 	"github.com/NaiKiDEV/ssh-chat/internal/model"
 	"github.com/NaiKiDEV/ssh-chat/internal/styles"
 	"github.com/NaiKiDEV/ssh-chat/internal/terminal"
-	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -19,6 +17,8 @@ import (
 const (
 	noneId = iota - 1
 	chatInputId
+	sendButtonId
+	leaveButtonId
 )
 
 const (
@@ -27,6 +27,11 @@ const (
 	onlineUsersContainerBorder  = 1
 	logoOffset                  = 6
 	messageBoxOffset            = 4
+	sendButtonSize              = 4 + 4
+	leaveButtonSize             = 5 + 4
+	buttonGap                   = 2
+	formGap                     = 3
+	containerXPadding           = 1
 )
 
 type ChatState struct {
@@ -43,7 +48,7 @@ type ChatState struct {
 }
 
 func NewChatState(userName string, ts *terminal.TerminalState, cs *styles.ClientStyles) ChatState {
-	chatInput := createAreaInput("Type your message...", 0, ts.Width)
+	chatInput := createAreaInput("Type your message...", 0, ts.Width-sendButtonSize-leaveButtonSize-buttonGap-containerXPadding*2-formGap)
 	chatInput.Focus()
 
 	contentOffset := chatInput.Height() + logoOffset + messageBoxOffset
@@ -65,178 +70,152 @@ func NewChatState(userName string, ts *terminal.TerminalState, cs *styles.Client
 	}
 }
 
-func createAreaInput(placeholder string, limit int, initialWidth int) textarea.Model {
-	ta := textarea.New()
-	ta.Placeholder = placeholder
-	ta.CharLimit = limit
-	ta.ShowLineNumbers = false
-
-	ta.MaxHeight = 2
-	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
-
-	ta.KeyMap.InsertNewline = key.NewBinding()
-
-	ta.Prompt = ""
-
-	ta.SetHeight(2)
-	ta.SetWidth(initialWidth)
-
-	return ta
+func (c ChatState) Init() tea.Cmd {
+	return textarea.Blink
 }
 
-func (l ChatState) Update(msg tea.Msg) (ChatState, tea.Cmd) {
+func (c ChatState) Reset() ChatState {
+	c.chatInput.SetValue("")
+	c.chatInput.Focus()
+	c.activeInputId = chatInputId
+	return c
+}
+
+func (c ChatState) SetRoom(roomId string, messages []model.Message) ChatState {
+	c.messages = messages
+	c.roomId = roomId
+	return c
+}
+
+func (c ChatState) SetChatState(messages []model.Message, activeUsers []string) ChatState {
+	c.activeUsers = activeUsers
+	c.messages = messages
+	return c
+}
+
+// Very dirty, no abstraction, but it might be fine
+func (c ChatState) focusNextFocusableElement(backwards bool) ChatState {
+	c.chatInput.Blur()
+
+	switch c.activeInputId {
+	case noneId:
+		if backwards {
+			c.activeInputId = leaveButtonId
+		} else {
+			c.activeInputId = chatInputId
+			c.chatInput.Focus()
+		}
+	case chatInputId:
+		if backwards {
+			c.activeInputId = noneId
+		} else {
+			c.activeInputId = sendButtonId
+		}
+	case sendButtonId:
+		if backwards {
+			c.activeInputId = chatInputId
+			c.chatInput.Focus()
+		} else {
+			c.activeInputId = leaveButtonId
+		}
+	case leaveButtonId:
+		if backwards {
+			c.activeInputId = sendButtonId
+		} else {
+			c.activeInputId = noneId
+		}
+	}
+
+	return c
+}
+
+func (c ChatState) Update(msg tea.Msg) (ChatState, tea.Cmd) {
 	var inCmd tea.Cmd
 	var vpCmd tea.Cmd
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "tab":
-			if l.activeInputId == noneId {
-				l.activeInputId = chatInputId
-				l.chatInput.Focus()
+		switch msg.Type {
+		case tea.KeyTab:
+			c = c.focusNextFocusableElement(false)
+			return c, nil
+		case tea.KeyShiftTab:
+			c = c.focusNextFocusableElement(true)
+			return c, nil
+		case tea.KeyEnter:
+			if c.activeInputId == noneId {
+				c.activeInputId = chatInputId
+				c.chatInput.Focus()
+				return c, nil
 			}
-		case "enter":
-			if l.activeInputId == noneId {
-				l.chatInput.Focus()
-				l.activeInputId = chatInputId
+			if c.activeInputId == sendButtonId {
+				if value := c.chatInput.Value(); value != "" {
+					c.chatInput.SetValue("")
+					c.chatInput.Focus()
+					c.activeInputId = chatInputId
+					return c, createMessageSentCmd(value)
+				}
 			}
-		case "esc":
-			l.chatInput.Blur()
-			l.activeInputId = noneId
+			if c.activeInputId == leaveButtonId {
+				return c, createLeaveChatCmd()
+			}
+
+			c.chatInput, inCmd = c.chatInput.Update(msg)
+			return c, inCmd
+		case tea.KeyEsc:
+			c.chatInput.Blur()
+			c.activeInputId = noneId
+			return c, nil
 		default:
-			l, inCmd = l.handleInput(msg)
+			c, inCmd = c.handleInput(msg)
 		}
+
+	case tea.MouseMsg:
+		var cmd tea.Cmd
+		c.chatViewport.SetContent(renderMessageView(c.userName, c.messages, c.clientStyles))
+		c.chatViewport, cmd = c.chatViewport.Update(msg)
+		return c, cmd
+
 	}
 
-	if l.activeInputId == noneId {
-		l.chatViewport, vpCmd = l.chatViewport.Update(msg)
+	if c.activeInputId == noneId {
+		c.chatViewport, vpCmd = c.chatViewport.Update(msg)
 	}
 
-	return l, tea.Batch(inCmd, vpCmd)
+	return c, tea.Batch(inCmd, vpCmd)
 }
 
-func (l ChatState) handleInput(msg tea.Msg) (ChatState, tea.Cmd) {
+func (c ChatState) handleInput(msg tea.Msg) (ChatState, tea.Cmd) {
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch l.activeInputId {
+		switch c.activeInputId {
 		case chatInputId:
-			l.chatInput, cmd = l.chatInput.Update(msg)
-		default:
-			l.chatViewport, cmd = l.chatViewport.Update(msg)
+			c.chatInput, cmd = c.chatInput.Update(msg)
+		case noneId:
+			c.chatViewport, cmd = c.chatViewport.Update(msg)
 		}
-		return l, cmd
+		return c, cmd
 	}
-	return l, cmd
+	return c, cmd
 }
 
-func (l ChatState) getMessageView(messages []model.Message, styles *styles.ClientStyles) string {
-	if messages == nil {
-		return ""
-	}
+func (c ChatState) Resize(terminalState *terminal.TerminalState) ChatState {
+	c.chatInput.SetWidth(terminalState.Width)
 
-	messageContent := strings.Builder{}
-	for _, msg := range messages {
-		messageContent.WriteString(renderMessage(msg.Text, msg.Username, msg.Username == l.userName, msg.Timestamp, styles))
-		messageContent.WriteRune('\n')
-	}
-
-	return messageContent.String()
-}
-
-func (l ChatState) HandleMouse(msg tea.MouseMsg) (ChatState, tea.Cmd) {
-	l.chatViewport.SetContent(l.getMessageView(l.messages, l.clientStyles))
-
-	var cmd tea.Cmd
-	l.chatViewport, cmd = l.chatViewport.Update(msg)
-
-	// if msg.Type == tea.MouseWheelUp || msg.Type == tea.MouseWheelDown {
-	// 	l.activeInputId = noneId
-	// 	l.chatInput.Blur()
-	// }
-
-	return l, cmd
-}
-
-func (l ChatState) Submit() (ChatState, string) {
-	value := l.chatInput.Value()
-	l.chatInput.SetValue("")
-	return l, value
-}
-
-func (l ChatState) CanSubmit() bool {
-	return l.activeInputId == chatInputId
-}
-
-func formatTime(time time.Time) string {
-	return fmt.Sprintf("%02d:%02d UTC", time.UTC().Hour(), time.UTC().Minute())
-}
-
-func clamp(value, min, max int) int {
-	if max < min {
-		return min
-	}
-	if value < min {
-		return min
-	}
-	if value > max {
-		return max
-	}
-	return value
-}
-
-func renderMessage(message string, userName string, isOwned bool, timestamp time.Time, styles *styles.ClientStyles) string {
-	container := lipgloss.NewStyle().Padding(0, 1, 1)
-
-	labelColor := styles.GreyColor
-	if isOwned {
-		labelColor = styles.PrimaryColor
-	}
-
-	styledLabel := styles.BoldRegularTxt.Foreground(labelColor).Render(userName)
-	styledMessage := styles.RegularTxt.Render(message)
-	styledTimestamp := styles.RegularTxt.Foreground(styles.MutedColor).Render(fmt.Sprintf(" (%s) ", formatTime(timestamp)))
-
-	messageCard := lipgloss.JoinVertical(lipgloss.Top, styledLabel+styledTimestamp, styledMessage)
-
-	return container.Render(messageCard)
-}
-
-func renderAreaInput(label string, ta textarea.Model, styles *styles.ClientStyles) string {
-	styledLabel := styles.BoldRegularTxt.Foreground(styles.PrimaryColor).Render(label)
-	input := lipgloss.JoinVertical(lipgloss.Top, styledLabel+": ", ta.View())
-	return input
-}
-
-func (l ChatState) Resize(terminalState *terminal.TerminalState) ChatState {
-	l.chatInput.SetWidth(terminalState.Width)
-
-	contentOffset := l.chatInput.Height() + logoOffset + messageBoxOffset
+	contentOffset := c.chatInput.Height() + logoOffset + messageBoxOffset
 	contentHeight := terminalState.Height - contentOffset
 
-	l.chatViewport.Width = terminalState.Width - onlineUsersContainerWidth - onlineUsersContainerPadding*2 - onlineUsersContainerBorder
-	l.chatViewport.Height = contentHeight
+	c.chatViewport.Width = terminalState.Width - onlineUsersContainerWidth - onlineUsersContainerPadding*2 - onlineUsersContainerBorder
+	c.chatViewport.Height = contentHeight
 
-	l.contentHeight = contentHeight
+	c.contentHeight = contentHeight
 
-	return l
+	return c
 }
 
-func (l ChatState) SetRoom(roomId string, messages []model.Message) ChatState {
-	l.messages = messages
-	l.roomId = roomId
-	return l
-}
-
-func (l ChatState) SetChatState(messages []model.Message, activeUsers []string) ChatState {
-	l.activeUsers = activeUsers
-	l.messages = messages
-	return l
-}
-
-func (l ChatState) Render(terminalState *terminal.TerminalState, messages []model.Message, activeUsers []string) string {
-	styles := l.clientStyles
+func (c ChatState) Render(terminalState *terminal.TerminalState, messages []model.Message, activeUsers []string) string {
+	styles := c.clientStyles
 
 	// Header
 	logo := lipgloss.NewStyle().
@@ -245,19 +224,19 @@ func (l ChatState) Render(terminalState *terminal.TerminalState, messages []mode
 		Render(consts.LOGO_NO_MARGIN)
 
 	var roomText string
-	if l.roomId != "" {
+	if c.roomId != "" {
 		roomLabel := styles.BoldRegularTxt.Render("Room: ")
-		roomText = lipgloss.NewStyle().PaddingLeft(1).MarginBottom(1).Render(roomLabel + l.roomId)
+		roomText = lipgloss.NewStyle().PaddingLeft(1).MarginBottom(1).Render(roomLabel + c.roomId)
 	}
 
 	header := lipgloss.JoinVertical(lipgloss.Top, logo, roomText)
 
 	// Online Users Card
 	styledActiveUsers := strings.Builder{}
-	clampedActiveUsersCount := clamp(len(activeUsers), 0, l.contentHeight-1)
+	clampedActiveUsersCount := clamp(len(activeUsers), 0, c.contentHeight-1)
 	for _, user := range activeUsers[:clampedActiveUsersCount] {
 		labelColor := styles.GreyColor
-		if user == l.userName {
+		if user == c.userName {
 			labelColor = styles.PrimaryColor
 		}
 		onlineUserText := styles.BoldRegularTxt.Foreground(labelColor).Render(user)
@@ -274,23 +253,35 @@ func (l ChatState) Render(terminalState *terminal.TerminalState, messages []mode
 		styledActiveUsersString += "\n"
 	}
 	onlineUsersContainer := lipgloss.NewStyle().
-		Height(l.contentHeight).
+		Height(c.contentHeight).
 		Width(onlineUsersContainerWidth).
 		Padding(0, onlineUsersContainerPadding, 0).
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderLeft(true).
 		Render(activeUsersCountText + onlineUsersLabelText + styledActiveUsersString)
 
-	l.chatViewport.SetContent(l.getMessageView(messages, styles))
+	c.chatViewport.SetContent(renderMessageView(c.userName, messages, styles))
 
-	// Chat Input
-	form := lipgloss.NewStyle().
-		Width(terminalState.Width).
-		Padding(2, 1, 0).
-		Height(2).
-		Render(renderAreaInput(l.userName, l.chatInput, styles))
+	// Input Box
+	inputBox := lipgloss.NewStyle().
+		Width(terminalState.Width - sendButtonSize - leaveButtonSize - buttonGap - containerXPadding*2 - 2).
+		Render(renderAreaInput(c.userName, c.chatInput, styles))
 
-	content := lipgloss.JoinHorizontal(lipgloss.Left, l.chatViewport.View(), onlineUsersContainer)
+	// Button Group
+	sendButton := renderButton("send", c.activeInputId == sendButtonId, styles)
+	buttonGap := strings.Repeat(" ", buttonGap)
+	leaveButton := renderButton("leave", c.activeInputId == leaveButtonId, styles)
+	buttonGroup := lipgloss.NewStyle().Padding(1, 0).Render(lipgloss.JoinHorizontal(lipgloss.Left, sendButton, buttonGap, leaveButton))
+
+	formContainer := lipgloss.NewStyle().Padding(2, containerXPadding, 0)
+	form := formContainer.Render(
+		lipgloss.JoinHorizontal(lipgloss.Left,
+			inputBox,
+			strings.Repeat(" ", formGap),
+			buttonGroup,
+		))
+
+	content := lipgloss.JoinHorizontal(lipgloss.Left, c.chatViewport.View(), onlineUsersContainer)
 
 	ui := lipgloss.JoinVertical(lipgloss.Left, header, content, form)
 
